@@ -40,7 +40,7 @@ class LSTM(object):
 
     def __init__(self, config,  inputs, labels, lengths, infer=False):
         self._inputs = inputs
-        self._mixed = inputs
+        self._mixed = tf.slice(inputs, [0,0,1], [-1,-1, config.output_size])
         self._labels1 = tf.slice(labels, [0,0,0], [-1,-1, config.output_size])
         self._labels2 = tf.slice(labels, [0,0,config.output_size], [-1,-1, -1])
         self._lengths = lengths
@@ -152,16 +152,60 @@ class LSTM(object):
        
        
         # Compute loss(Mse)
-        cost1 = tf.reduce_mean( tf.reduce_sum(tf.pow(self._cleaned1-self._labels1,2),1)
+        # scaled_clean1=tf.divide(tf.matmul(1000, self._cleaned1 - tf.reshape(tf.reduce_min(self._cleaned1, 1),
+        #                                                       [config.batch_size, -1, config.output_size])),
+        #           tf.reshape(tf.reduce_max(self._cleaned1, 1) - tf.reduce_min(self._cleaned1, 1),
+        #                      [config.batch_size, -1, config.output_size]))
+        # scaled_clean2 = tf.divide(tf.matmul(1000, self._cleaned2 - tf.reshape(tf.reduce_min(self._cleaned2, 1),
+        #                                                                      [config.batch_size, -1,
+        #                                                                       config.output_size])),
+        #                          tf.reshape(tf.reduce_max(self._cleaned2, 1) - tf.reduce_min(self._cleaned2, 1),
+        #                                     [config.batch_size, -1, config.output_size]))
+        # scaled_label1=tf.divide(tf.matmul(1000, self._labels1 - tf.reshape(tf.reduce_min(self._labels1, 1),
+        #                                                       [config.batch_size, -1, config.output_size])),
+        #           tf.reshape(tf.reduce_max(self._labels1, 1) - tf.reduce_min(self._labels1, 1),
+        #                      [config.batch_size, -1, config.output_size]))
+        # scaled_label2 = tf.divide(tf.matmul(1000, self._labels2 - tf.reshape(tf.reduce_min(self._labels2, 1),
+        #                                                                      [config.batch_size, -1,
+        #                                                                       config.output_size])),
+        #                           tf.reshape(tf.reduce_max(self._labels2, 1) - tf.reduce_min(self._labels2, 1),
+        #                                      [config.batch_size, -1, config.output_size]))
+
+        scaled_clean1 = tf.divide( tf.multiply(self._mixed ,self._cleaned1 - tf.reshape(tf.reduce_min(self._cleaned1, 1),
+                                                                              [config.batch_size, -1,
+                                                                               config.output_size])),
+                                  tf.reshape(tf.reduce_max(self._cleaned1, 1) - tf.reduce_min(self._cleaned1, 1)+tf.ones([config.batch_size, config.output_size]),
+                                             [config.batch_size, -1, config.output_size]))
+        scaled_clean2 = tf.divide(tf.multiply( self._mixed,self._cleaned2 - tf.reshape(tf.reduce_min(self._cleaned2, 1),
+                                                                              [config.batch_size, -1,
+                                                                               config.output_size])),
+                                  tf.reshape(tf.reduce_max(self._cleaned2, 1) - tf.reduce_min(self._cleaned2, 1)+tf.ones([config.batch_size, config.output_size]),
+                                             [config.batch_size, -1, config.output_size]))
+        scaled_label1 = tf.divide(tf.multiply( self._mixed,self._labels1 - tf.reshape(tf.reduce_min(self._labels1, 1),
+                                                                             [config.batch_size, -1,
+                                                                              config.output_size])),
+                                  tf.reshape(tf.reduce_max(self._labels1, 1) - tf.reduce_min(self._labels1, 1)+tf.ones([config.batch_size, config.output_size]),
+                                             [config.batch_size, -1, config.output_size]))
+        scaled_label2 = tf.divide(tf.multiply( self._mixed, self._labels2 - tf.reshape(tf.reduce_min(self._labels2, 1),
+                                                                             [config.batch_size, -1,
+                                                                              config.output_size])),
+                                  tf.reshape(tf.reduce_max(self._labels2, 1) - tf.reduce_min(self._labels2, 1)+tf.ones([config.batch_size, config.output_size]),
+                                             [config.batch_size, -1, config.output_size]))
+        #
+        cost1_1 = tf.reduce_mean( tf.reduce_sum(tf.pow(scaled_clean1-scaled_label1,2),1)
+                               +tf.reduce_sum(tf.pow(scaled_clean2-scaled_label2,2),1)
+                               ,1)
+        cost1_2 = tf.reduce_mean( tf.reduce_sum(tf.pow(self._cleaned1-self._labels1,2),1)
                                +tf.reduce_sum(tf.pow(self._cleaned2-self._labels2,2),1)
-                               ,1) 
+                               ,1)
+        cost1_3=tf.reduce_mean( tf.reduce_sum(tf.pow(self._mixed-self._cleaned1-self._cleaned2,2),1),1)
+        cost1=config.cost_right*cost1_1+cost1_3
         # cost2 = tf.reduce_mean( tf.reduce_sum(tf.pow(self._cleaned2-self._labels1,2),1)
         #                        +tf.reduce_sum(tf.pow(self._cleaned1-self._labels2,2),1)
         #                        ,1)
-        #
-        # idx = tf.cast(cost1>cost2,tf.float32)
-        # self._loss = tf.reduce_sum(idx*cost2+(1-idx)*cost1)
-        self._loss = tf.reduce_sum(cost1)
+        cost2=cost1
+        idx = tf.cast(cost1>cost2,tf.float32)
+        self._loss = tf.reduce_sum(idx*cost2+(1-idx)*cost1)
         if tf.get_variable_scope().reuse: return
 
         self._lr = tf.Variable(0.0, trainable=False)

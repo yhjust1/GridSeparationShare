@@ -24,10 +24,10 @@ def gen_feats(dir,file_name,type):
             if(write_index==0):#新的一周开始
                 countH=0
                 mix_input = np.zeros([96*7,2])#母线
-                single1 = np.zeros([96*7,2])#支线1
-                single2 = np.zeros([96*7, 2])  # 支线2
+                single1 = np.zeros([96*7,1])#支线1
+                single2 = np.zeros([96*7, 1])  # 支线2
             #######################################
-            if line[1]==1 :
+            if line[1]=='1.0' :
                 countH =countH+1;
 
             mix_input[write_index,0]=line[2]
@@ -35,25 +35,25 @@ def gen_feats(dir,file_name,type):
             # mix_input[write_index, 2] = line[2]
             # mix_input[write_index, 3] = line[3]
             #######################################
-            single1[write_index, 0] = line[2]
-            single1[write_index, 1] = line[4]
+            # single1[write_index, 0] = line[2]
+            single1[write_index, 0] = line[4]
             # single1[write_index, 2] = line[2]
             # single1[write_index, 3] = line[4]
             #######################################
-            single2[write_index, 0] = line[2]
-            single2[write_index, 1] = line[5]
+            # single2[write_index, 0] = line[2]
+            single2[write_index, 0] = line[5]
             # single2[write_index, 2] = line[2]
             # single2[write_index, 3] = line[5]
 
-            if (write_index == (96*7-1)):#一周输入完成,写入tfrecords文件
+            if (write_index == (96*7-1) and countH // 96<3):#一周输入完成,写入tfrecords文件
                 # if countH > 2:#去除含有特殊假日的数据
                 #     break
                 tf_name=file_name+str(count)
                 count += 1
                 if type =='tr':
-                    tfrecords_name = 'D:/Grid/data/input-2D/tr/' + tf_name + '.tfrecords'
+                    tfrecords_name = 'D:/Grid/data/input-2D-various/tr/' + tf_name + '.tfrecords'
                 else:
-                    tfrecords_name = 'D:/Grid/data/input-2D/cv/' + tf_name + '.tfrecords'
+                    tfrecords_name = 'D:/Grid/data/input-2D-various/cv/' + tf_name + '.tfrecords'
                 print(tfrecords_name)
                 with tf.python_io.TFRecordWriter(tfrecords_name) as writer:
                     inputs = np.concatenate((mix_input, mix_input), axis=1)
@@ -94,6 +94,10 @@ def get_file_list(data_dir):
     Stra=data_dir
     Strb='*.csv'
     a_list = fnmatch.filter(os.listdir(Stra), Strb)
+    if not os.path.exists('D:/Grid/data/input-2D-various/tr'):
+        os.makedirs('D:/Grid/data/input-2D-various/tr')
+    if not os.path.exists('D:/Grid/data/input-2D-various/cv'):
+        os.makedirs('D:/Grid/data/input-2D-various/cv')
     for i in range(len(a_list)):
         # a_list[i] = Stra + '/' + a_list[i]
         if i>len(a_list)*0.8:
@@ -107,5 +111,5 @@ if __name__ == "__main__":
     # gen_feats(name)
     # name='440c040j.wav'
     # gen_feats(name)
-    data_dir = 'D:/组会/电力/相关代码/clean'
+    data_dir = 'D:/Grid/csvData/input-2D-various12/clean'
     get_file_list(data_dir)
