@@ -52,7 +52,7 @@ def decode():
             with tf.name_scope('input'):
                 tt_mixed,tt_labels,tt_genders,tt_lengths = get_padded_batch(
                     tfrecords_lst, FLAGS.batch_size, FLAGS.input_size*2,
-                    FLAGS.output_size*2, num_enqueuing_threads=1,
+                    FLAGS.output_size*5, num_enqueuing_threads=1,
                     num_epochs=1,shuffle=False)
                 tt_inputs = tf.slice(tt_mixed, [0,0,0], [-1,-1, FLAGS.input_size])
                 tt_angles = tf.slice(tt_mixed,[0,0, FLAGS.input_size], [-1,-1, -1])            
@@ -170,12 +170,12 @@ def train():
             with tf.name_scope('input'):
                 tr_mixed,tr_labels,tr_lengths = get_padded_batch(
                     tr_tfrecords_lst, FLAGS.batch_size, FLAGS.input_size*2,
-                    FLAGS.output_size*2, num_enqueuing_threads=FLAGS.num_threads,
+                    FLAGS.output_size*5, num_enqueuing_threads=FLAGS.num_threads,
                     num_epochs=FLAGS.max_epochs)
 
                 val_mixed,val_labels,val_lengths = get_padded_batch(
                     val_tfrecords_lst, FLAGS.batch_size, FLAGS.input_size*2,
-                    FLAGS.output_size*2, num_enqueuing_threads=FLAGS.num_threads,
+                    FLAGS.output_size*5, num_enqueuing_threads=FLAGS.num_threads,
                     num_epochs=FLAGS.max_epochs + 1)
                 tr_inputs = tf.slice(tr_mixed, [0,0,0], [-1,-1, FLAGS.input_size])
                 val_inputs = tf.slice(val_mixed, [0,0,0], [-1,-1, FLAGS.input_size])
@@ -185,10 +185,10 @@ def train():
             print(tr_inputs.shape)
             print(tr_labels.shape)
             print(tr_lengths)
-            tr_model = LSTM(FLAGS, tr_inputs, tr_labels,tr_lengths)
+            tr_model = LSTM(FLAGS, tr_inputs, tr_labels,tr_lengths,1)
             # tr_model and val_model should share variables
             tf.get_variable_scope().reuse_variables()
-            val_model = LSTM(FLAGS, val_inputs, val_labels,val_lengths)
+            val_model = LSTM(FLAGS, val_inputs, val_labels,val_lengths,1)
         show_all_variables()
         init = tf.group(tf.global_variables_initializer(),
                         tf.local_variables_initializer())
@@ -200,6 +200,7 @@ def train():
         #sess = tf.InteractiveSession(config=config)
         sess = tf.Session(config=config)
         sess.run(init)
+        #best_path=tf.train.get_checkpoint_state(FLAGS.save_dir + '/nnet').model_checkpoint_path
         if FLAGS.resume_training.lower()=='true':
             ckpt = tf.train.get_checkpoint_state(FLAGS.save_dir + '/nnet')
             if ckpt and ckpt.model_checkpoint_path:
@@ -213,84 +214,228 @@ def train():
         try:
             # Cross validation before training.
             loss_prev = eval_one_epoch(sess, coord, val_model, val_num_batches)
+            loss_first=loss_prev
             tf.logging.info("CROSSVAL PRERUN AVG.LOSS %.4F" % loss_prev)
 
             sess.run(tf.assign(tr_model.lr, FLAGS.learning_rate))
-            for epoch in xrange(FLAGS.max_epochs):
-                start_time = time.time()
 
-                # Training
-                tr_loss = train_one_epoch(sess, coord, tr_model, tr_num_batches)
-                
-                # Validation
-                val_loss = eval_one_epoch(sess, coord, val_model, val_num_batches)
+            countEpoch=0
+            for epochs in xrange(FLAGS.max_epochs):
+                # 当一种类型训练的足够好的时候，change cost 计算对象
+                loss_prev=loss_first
+                sess.run(tf.assign(tr_model.costType, tf.constant(epochs % 7 + 1)))
+                sess.run(tf.assign(val_model.costType, tf.constant(epochs % 7 + 1)))
+                effectEpoch=0
+                for epoch in xrange(FLAGS.max_epochs):
+                    start_time = time.time()
 
-                end_time = time.time()
-                # Determine checkpoint path
-                ckpt_name = "nnet_iter%d_lrate%e_tr%.4f_cv%.4f" % (
-                    epoch + 1, FLAGS.learning_rate, tr_loss, val_loss)
-                ckpt_dir = FLAGS.save_dir + '/nnet'
-                if not os.path.exists(ckpt_dir):
-                    os.makedirs(ckpt_dir)
-                ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-                # Relative loss between previous and current val_loss
-                rel_impr = (loss_prev - val_loss) / loss_prev
-               # Accept or reject new parameters
-                if val_loss < loss_prev :
-                    tr_model.saver.save(sess, ckpt_path)
-                    # Logging train loss along with validation loss
-                    loss_prev = val_loss
-                    best_path = ckpt_path
-                    tf.logging.info(
-                        "ITERATION %d: TRAIN AVG.LOSS %.4f, (lrate%e) CROSSVAL"
-                        " AVG.LOSS %.4f, %s (%s), TIME USED: %.2fs"% (
-                            epoch + 1, tr_loss, FLAGS.learning_rate, val_loss,
-                            "nnet accepted", ckpt_name,
-                            (end_time - start_time) / 1))
-                    #输出结果数据
-                    cleaned1, cleaned2 = sess.run([val_model._cleaned1, val_model._cleaned2])
-                    data_dir = FLAGS.data_dir
-                    if not os.path.exists(data_dir):
-                        os.makedirs(data_dir)
-                    # sequence = activations * cmvn['stddev_labels'] + \
-                    #    cmvn['mean_labels']
-                    if epoch > FLAGS.min_epochs-2:
-                        for i in range(0, FLAGS.batch_size):
+                    # Training
+                    tr_loss = train_one_epoch(sess, coord, tr_model, tr_num_batches)
+
+                    # Validation
+                    val_loss = eval_one_epoch(sess, coord, val_model, val_num_batches)
+
+                    end_time = time.time()
+                    # Determine checkpoint path
+                    ckpt_name = "nnet_iter%dnnet_iter%d_lrate%e_tr%.4f_cv%.4f" % (
+                        epochs + 1,epoch + 1, FLAGS.learning_rate, tr_loss, val_loss)
+                    ckpt_dir = FLAGS.save_dir + '/nnet'
+                    if not os.path.exists(ckpt_dir):
+                        os.makedirs(ckpt_dir)
+                    ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+                    # Relative loss between previous and current val_loss
+                    rel_impr = (loss_prev - val_loss) / loss_prev
+                   # Accept or reject new parameters
+                    if val_loss < loss_prev :
+                        tr_model.saver.save(sess, ckpt_path)
+                        # Logging train loss along with validation loss
+                        loss_prev = val_loss
+                        best_path = ckpt_path
+                        costType=sess.run(tr_model._costType)
+                        valType = sess.run(val_model._costType)
+                        tf.logging.info(
+                            " %d ITERATION %d: TRAIN AVG.LOSS %.4f, (lrate%e) CROSSVAL"
+                            " AVG.LOSS %.4f, %s (%s), TIME USED: %.2fs,COST TYPE: %d,Val Cost: %d"% (
+                                epochs + 1,epoch + 1, tr_loss, FLAGS.learning_rate, val_loss,
+                                "nnet accepted", ckpt_name,
+                                (end_time - start_time) / 1,costType,valType))
+                        effectEpoch += 1
+                        # sequence = activations * cmvn['stddev_labels'] + \
+                        #    cmvn['mean_labels']
+
+                    else:
+                        tr_model.saver.restore(sess, best_path)
+                        costType = sess.run(tr_model._costType)
+                        valType = sess.run(val_model._costType)
+                        tf.logging.info(
+                            " %d ITERATION %d: TRAIN AVG.LOSS %.4f, (lrate%e) CROSSVAL"
+                            " AVG.LOSS %.4f, %s, (%s), TIME USED: %.2fs,COST TYPE: %d,Val Cost: %d" % (
+                                epochs+1 ,epoch + 1, tr_loss, FLAGS.learning_rate, val_loss,
+                                "nnet rejected", ckpt_name,
+                                (end_time - start_time) / 1,costType,valType))
+
+                    # Start halving when improvement is low
+                    if rel_impr < FLAGS.start_halving_impr:
+                        FLAGS.learning_rate *= FLAGS.halving_factor
+                        sess.run(tf.assign(tr_model.lr, FLAGS.learning_rate))
+
+                    # Stopping criterion
+                    if rel_impr < FLAGS.end_halving_impr:
+                        if epoch < FLAGS.min_epochs:
+                            tf.logging.info(
+                                "we were supposed to finish, but we continue as "
+                                "min_epochs : %s" % FLAGS.min_epochs)
+                            continue
+                        else:
+                            # 输出结果数据
+                            # print("Writing output data ...")
+                            # cleaned1, cleaned2, cleaned3, cleaned4, cleaned5 ,label1, label2,label3, label4,label5= sess.run(
+                            #     [val_model._cleaned1, val_model._cleaned2, val_model._cleaned3, val_model._cleaned4,
+                            #      val_model._cleaned5,val_model._labels1,val_model._labels2,val_model._labels3,val_model._labels4,val_model._labels5])
+                            # output_dir = FLAGS.output_dir
+                            # if not os.path.exists(output_dir):
+                            #     os.makedirs(output_dir)
+                            # for i in range(0, len(val_tfrecords_lst)):
+                            #     tffilename = val_tfrecords_lst[i]
+                            #     outputfilename = tffilename.split('/')[-1]
+                            #     # print(tffilename)
+                            #     (_, name) = os.path.split(tffilename)
+                            #     (partname, _) = os.path.splitext(name)
+                            #     # wav_name1 = tffilename + '_1.csv'
+                            #     # wav_name2 = tffilename + '_2.csv'
+                            #     wav_nametotal = output_dir + '/' + outputfilename + '_output.csv'
+                            #     # result = np.concatenate((np.array(label1[i, :, 1]), np.array(label2[i, :, 1]),np.array(cleaned1[i, :, 1]),np.array(cleaned2[i, :, 1])), axis=0)
+                            #     result = np.vstack((np.array(label1[i%FLAGS.batch_size, :,0]), np.array(label2[i%FLAGS.batch_size, :,0]),np.array(label3[i%FLAGS.batch_size, :,0]), np.array(label4[i%FLAGS.batch_size, :, 0]),np.array(label5[i%FLAGS.batch_size, :, 0]),
+                            #                         np.array(cleaned1[i%FLAGS.batch_size, :, 0]), np.array(cleaned2[i%FLAGS.batch_size, :,0]),np.array(cleaned3[i%FLAGS.batch_size, :, 0]), np.array(cleaned4[i%FLAGS.batch_size, :,0]),np.array(cleaned5[i%FLAGS.batch_size, :, 0]))).T
+                            #     # df = pd.DataFrame(np.array(cleaned1[i, :, :]), columns=['te', 'p'])
+                            #     # df.to_csv(wav_name1, columns=['te', 'p'], index=False, header=False)
+                            #     # df = pd.DataFrame(np.array(cleaned2[i, :, :]), columns=['te', 'p'])
+                            #     # df.to_csv(wav_name2, columns=['te', 'p'], index=False, header=False)
+                            #     df = pd.DataFrame(result, columns=['label1', 'label2', 'label3', 'label4','label5', 'predict1', 'predict2','predict3', 'predict4','predict5'])
+                            #     df.to_csv(wav_nametotal, columns=['label1', 'label2', 'label3', 'label4','label5', 'predict1', 'predict2','predict3', 'predict4','predict5'], index=False)
+                            tf.logging.info(
+                                "Smail finished, too small rel. improvement %g" % rel_impr)
+                            break
+                countEpoch += effectEpoch
+                if (epochs+1)%7 ==0:
+                    if countEpoch<=14:
+                        # 输出结果数据
+                        print("Writing output data ...")
+                        cleaned1, cleaned2, cleaned3, cleaned4, cleaned5 ,label1, label2,label3, label4,label5= sess.run(
+                            [val_model._cleaned1, val_model._cleaned2, val_model._cleaned3, val_model._cleaned4,
+                             val_model._cleaned5,val_model._labels1,val_model._labels2,val_model._labels3,val_model._labels4,val_model._labels5])
+                        output_dir = FLAGS.output_dir
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        for i in range(0, len(val_tfrecords_lst)):
                             tffilename = val_tfrecords_lst[i]
-                            print(tffilename)
+                            outputfilename = tffilename.split('/')[-1]
+                            # print(tffilename)
                             (_, name) = os.path.split(tffilename)
                             (partname, _) = os.path.splitext(name)
-                            wav_name1 = tffilename + '_1.csv'
-                            wav_name2 = tffilename + '_2.csv'
-                            df = pd.DataFrame(np.array(cleaned1[i,:,:]), columns=['te','p'])
-                            df.to_csv(wav_name1, columns=['te','p'], index=False, header=False)
-                            df = pd.DataFrame(np.array(cleaned2[i, :, :]), columns=['te', 'p'])
-                            df.to_csv(wav_name2, columns=['te', 'p'], index=False, header=False)
-                else:
-                    tr_model.saver.restore(sess, best_path)
-                    tf.logging.info(
-                        "ITERATION %d: TRAIN AVG.LOSS %.4f, (lrate%e) CROSSVAL"
-                        " AVG.LOSS %.4f, %s, (%s), TIME USED: %.2fs" % (
-                            epoch + 1, tr_loss, FLAGS.learning_rate, val_loss,
-                            "nnet rejected", ckpt_name,
-                            (end_time - start_time) / 1))
-
-                # Start halving when improvement is low
-                if rel_impr < FLAGS.start_halving_impr:
-                    FLAGS.learning_rate *= FLAGS.halving_factor
-                    sess.run(tf.assign(tr_model.lr, FLAGS.learning_rate))
-
-                # Stopping criterion
-                if rel_impr < FLAGS.end_halving_impr:
-                    if epoch < FLAGS.min_epochs:
-                        tf.logging.info(
-                            "we were supposed to finish, but we continue as "
-                            "min_epochs : %s" % FLAGS.min_epochs)
-                        continue
-                    else:
+                            # wav_name1 = tffilename + '_1.csv'
+                            # wav_name2 = tffilename + '_2.csv'
+                            wav_nametotal = output_dir + '/' + outputfilename + '_output.csv'
+                            # result = np.concatenate((np.array(label1[i, :, 1]), np.array(label2[i, :, 1]),np.array(cleaned1[i, :, 1]),np.array(cleaned2[i, :, 1])), axis=0)
+                            result = np.vstack((np.array(label1[i%FLAGS.batch_size, :,0]), np.array(label2[i%FLAGS.batch_size, :,0]),np.array(label3[i%FLAGS.batch_size, :,0]), np.array(label4[i%FLAGS.batch_size, :, 0]),np.array(label5[i%FLAGS.batch_size, :, 0]),
+                                                np.array(cleaned1[i%FLAGS.batch_size, :, 0]), np.array(cleaned2[i%FLAGS.batch_size, :,0]),np.array(cleaned3[i%FLAGS.batch_size, :, 0]), np.array(cleaned4[i%FLAGS.batch_size, :,0]),np.array(cleaned5[i%FLAGS.batch_size, :, 0]))).T
+                            # df = pd.DataFrame(np.array(cleaned1[i, :, :]), columns=['te', 'p'])
+                            # df.to_csv(wav_name1, columns=['te', 'p'], index=False, header=False)
+                            # df = pd.DataFrame(np.array(cleaned2[i, :, :]), columns=['te', 'p'])
+                            # df.to_csv(wav_name2, columns=['te', 'p'], index=False, header=False)
+                            df = pd.DataFrame(result, columns=['label1', 'label2', 'label3', 'label4','label5', 'predict1', 'predict2','predict3', 'predict4','predict5'])
+                            df.to_csv(wav_nametotal, columns=['label1', 'label2', 'label3', 'label4','label5', 'predict1', 'predict2','predict3', 'predict4','predict5'], index=False)
                         tf.logging.info(
                             "finished, too small rel. improvement %g" % rel_impr)
                         break
+                    else:
+                        countEpoch=0
+
+                if(epochs >= FLAGS.max_epochs-1):
+                    # 输出结果数据
+                    print("Writing output data ...")
+                    cleaned1, cleaned2, cleaned3, cleaned4, cleaned5, label1, label2, label3, label4, label5 = sess.run(
+                        [val_model._cleaned1, val_model._cleaned2, val_model._cleaned3, val_model._cleaned4,
+                         val_model._cleaned5, val_model._labels1, val_model._labels2, val_model._labels3,
+                         val_model._labels4, val_model._labels5])
+                    output_dir = FLAGS.output_dir
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                    for i in range(0, len(val_tfrecords_lst)):
+                        tffilename = val_tfrecords_lst[i]
+                        outputfilename = tffilename.split('/')[-1]
+                        # print(tffilename)
+                        (_, name) = os.path.split(tffilename)
+                        (partname, _) = os.path.splitext(name)
+                        # wav_name1 = tffilename + '_1.csv'
+                        # wav_name2 = tffilename + '_2.csv'
+                        wav_nametotal = output_dir + '/' + outputfilename + '_output.csv'
+                        # result = np.concatenate((np.array(label1[i, :, 1]), np.array(label2[i, :, 1]),np.array(cleaned1[i, :, 1]),np.array(cleaned2[i, :, 1])), axis=0)
+                        result = np.vstack((np.array(label1[i % FLAGS.batch_size, :, 0]),
+                                            np.array(label2[i % FLAGS.batch_size, :, 0]),
+                                            np.array(label3[i % FLAGS.batch_size, :, 0]),
+                                            np.array(label4[i % FLAGS.batch_size, :, 0]),
+                                            np.array(label5[i % FLAGS.batch_size, :, 0]),
+                                            np.array(cleaned1[i % FLAGS.batch_size, :, 0]),
+                                            np.array(cleaned2[i % FLAGS.batch_size, :, 0]),
+                                            np.array(cleaned3[i % FLAGS.batch_size, :, 0]),
+                                            np.array(cleaned4[i % FLAGS.batch_size, :, 0]),
+                                            np.array(cleaned5[i % FLAGS.batch_size, :, 0]))).T
+                        # df = pd.DataFrame(np.array(cleaned1[i, :, :]), columns=['te', 'p'])
+                        # df.to_csv(wav_name1, columns=['te', 'p'], index=False, header=False)
+                        # df = pd.DataFrame(np.array(cleaned2[i, :, :]), columns=['te', 'p'])
+                        # df.to_csv(wav_name2, columns=['te', 'p'], index=False, header=False)
+                        df = pd.DataFrame(result, columns=['label1', 'label2', 'label3', 'label4', 'label5', 'predict1',
+                                                           'predict2', 'predict3', 'predict4', 'predict5'])
+                        df.to_csv(wav_nametotal,
+                                  columns=['label1', 'label2', 'label3', 'label4', 'label5', 'predict1', 'predict2',
+                                           'predict3', 'predict4', 'predict5'], index=False)
+                    tf.logging.info(
+                        "Big finished, too small rel. improvement %g" % rel_impr)
+
+            # 达到最大迭代次数输出结果数据
+            if epochs >= FLAGS.max_epochs:
+                print("Writing output data ...")
+                cleaned1, cleaned2, cleaned3, cleaned4, cleaned5, label1, label2, label3, label4, label5 = sess.run(
+                    [val_model._cleaned1, val_model._cleaned2, val_model._cleaned3, val_model._cleaned4,
+                     val_model._cleaned5, val_model._labels1, val_model._labels2, val_model._labels3,
+                     val_model._labels4, val_model._labels5])
+                output_dir = FLAGS.output_dir
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                for i in range(0, len(val_tfrecords_lst)):
+                    tffilename = val_tfrecords_lst[i]
+                    outputfilename = tffilename.split('/')[-1]
+                    # print(tffilename)
+                    (_, name) = os.path.split(tffilename)
+                    (partname, _) = os.path.splitext(name)
+                    # wav_name1 = tffilename + '_1.csv'
+                    # wav_name2 = tffilename + '_2.csv'
+                    wav_nametotal = output_dir + '/' + outputfilename + '_output.csv'
+                    # result = np.concatenate((np.array(label1[i, :, 1]), np.array(label2[i, :, 1]),np.array(cleaned1[i, :, 1]),np.array(cleaned2[i, :, 1])), axis=0)
+                    result = np.vstack((np.array(label1[i % FLAGS.batch_size, :, 0]),
+                                        np.array(label2[i % FLAGS.batch_size, :, 0]),
+                                        np.array(label3[i % FLAGS.batch_size, :, 0]),
+                                        np.array(label4[i % FLAGS.batch_size, :, 0]),
+                                        np.array(label5[i % FLAGS.batch_size, :, 0]),
+                                        np.array(cleaned1[i % FLAGS.batch_size, :, 0]),
+                                        np.array(cleaned2[i % FLAGS.batch_size, :, 0]),
+                                        np.array(cleaned3[i % FLAGS.batch_size, :, 0]),
+                                        np.array(cleaned4[i % FLAGS.batch_size, :, 0]),
+                                        np.array(cleaned5[i % FLAGS.batch_size, :, 0]))).T
+                    # df = pd.DataFrame(np.array(cleaned1[i, :, :]), columns=['te', 'p'])
+                    # df.to_csv(wav_name1, columns=['te', 'p'], index=False, header=False)
+                    # df = pd.DataFrame(np.array(cleaned2[i, :, :]), columns=['te', 'p'])
+                    # df.to_csv(wav_name2, columns=['te', 'p'], index=False, header=False)
+                    df = pd.DataFrame(result, columns=['label1', 'label2', 'label3', 'label4', 'label5', 'predict1',
+                                                       'predict2', 'predict3', 'predict4', 'predict5'])
+                    df.to_csv(wav_nametotal,
+                              columns=['label1', 'label2', 'label3', 'label4', 'label5', 'predict1', 'predict2',
+                                       'predict3', 'predict4', 'predict5'], index=False)
+                print("Finished write output data ...")
+
+
+
         except Exception as e:
             # Report exceptions to the coordinator.
             coord.request_stop(e)
@@ -321,6 +466,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--save_dir',
+        type=str,
+        default='D:/Grid/data/result-2D',
+        help="Directory to put the train result."
+    )
+    parser.add_argument(
+        '--output_dir',
         type=str,
         default='D:/Grid/data/result-2D',
         help="Directory to put the train result."
@@ -398,9 +549,6 @@ if __name__ == "__main__":
         default=0,
         help="chrip-z transform feats dimension. it should be 0 if you just use fft spectrum feats"
     )
- 
-
-
     parser.add_argument(
         '--halving_factor',
         type=float,
